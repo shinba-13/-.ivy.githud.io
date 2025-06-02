@@ -1,0 +1,384 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ジャグラー風スロット（複数段＋斜め判定）</title>
+<style>
+  body {
+    font-family: sans-serif;
+    background:#222; color:#fff;
+    text-align:center;
+    margin:0; padding:20px;
+  }
+  .slot {
+    display:flex;
+    justify-content:center;
+    gap:10px;
+    margin:15px 0;
+  }
+  .reel {
+    width: 60px;
+    height: 120px;
+    overflow: hidden;
+    border: 2px solid #555;
+    background: black;
+    position: relative;
+  }
+  .symbols {
+    position: absolute;
+    top: 0;
+    transition: top 0.3s ease-out;
+  }
+  .symbol {
+    height: 40px;
+    font-size: 32px;
+    line-height: 40px;
+  }
+  button {
+    padding: 10px 20px;
+    font-size: 16px;
+    margin: 5px;
+  }
+  #gogo {
+    display: none;
+    font-size: 48px;
+    color: magenta;
+    font-weight: bold;
+    animation: blink 1s infinite, grow 1s infinite alternate;
+  }
+  @keyframes blink {
+    0%, 100% {opacity:1;}
+    50% {opacity:0.2;}
+  }
+  @keyframes grow {
+    0% {transform: scale(1);}
+    100% {transform: scale(1.2);}
+  }
+  input[type="number"] {
+    width: 80px;
+    font-size: 16px;
+    text-align: right;
+    margin-left: 5px;
+  }
+  #loan-area {
+    margin-top: 10px;
+    color: #f55;
+  }
+  @media (max-width: 600px) {
+    .reel { width: 50px; height: 100px;}
+    .symbol { font-size: 28px; height: 33px; line-height: 33px;}
+    button { font-size: 14px;}
+  }
+</style>
+</head>
+<body>
+
+<h1>🎰 ジャグラー風スロット（複数段＋斜め揃い対応）</h1>
+
+<div>
+  所持コイン: <span id="coin-count">0</span> 枚　
+  ベット: <input type="number" id="bet-amount" value="3" min="1" />
+</div>
+
+<div class="slot" id="slot">
+  <div class="reel" id="reel0"><div class="symbols"></div></div>
+  <div class="reel" id="reel1"><div class="symbols"></div></div>
+  <div class="reel" id="reel2"><div class="symbols"></div></div>
+</div>
+
+<div id="gogo">GOGO!!</div>
+
+<div>
+  <button onclick="start()">スタート</button>
+  <button onclick="stop(0)">ストップ①</button>
+  <button onclick="stop(1)">ストップ②</button>
+  <button onclick="stop(2)">ストップ③</button>
+</div>
+
+<div>
+  <button onclick="toggleAuto()">オートプレイ</button>
+  <button onclick="toggleSlowSpin()">目押しモード切替</button>
+</div>
+
+<div id="loan-area" style="display:none;">
+  コインがなくなりました。<button onclick="loanCoins()">貸し出しする</button>
+</div>
+
+<script>
+const symbols = ["🍒", "🍇", "🔔", "7️⃣", "BAR", "🌈"];
+const symbolProb = {
+  "🍒": 0.3, "🍇": 0.25, "🔔": 0.2,
+  "7️⃣": 0.15, "BAR": 0.09, "🌈": 0.01
+};
+
+const reels = [
+  document.querySelector("#reel0 .symbols"),
+  document.querySelector("#reel1 .symbols"),
+  document.querySelector("#reel2 .symbols")
+];
+const reelContainers = [
+  document.getElementById("reel0"),
+  document.getElementById("reel1"),
+  document.getElementById("reel2")
+];
+const gogoEl = document.getElementById("gogo");
+const coinCountEl = document.getElementById("coin-count");
+const betInput = document.getElementById("bet-amount");
+
+const bgmBig = new Audio("https://assets.mixkit.co/music/preview/mixkit-game-level-completed-2059.mp3");
+const bgmReg = new Audio("https://assets.mixkit.co/music/preview/mixkit-retro-arcade-funk-213.mp3");
+bgmBig.loop = true; bgmReg.loop = true;
+
+let coins = 100;
+let spinning = [false, false, false];
+let stopped = [false, false, false];
+let spinIntervals = [null, null, null];
+let spinPositions = [null, null, null]; // ここは各リールの停止シンボル配列3つ入る
+let currentStopIndex = 0;
+let autoPlay = false;
+let lastBet = 3;
+const symbolHeight = 40;
+let isSlowSpin = false;
+
+function updateCoinDisplay() {
+  coinCountEl.textContent = coins;
+  const loanArea = document.getElementById("loan-area");
+  if (coins <= 0) {
+    loanArea.style.display = "block";
+  } else {
+    loanArea.style.display = "none";
+  }
+}
+
+function loadCoins() {
+  const saved = localStorage.getItem("juggler_coins");
+  if (saved !== null) coins = parseInt(saved, 10);
+  updateCoinDisplay();
+}
+
+function saveCoins() {
+  localStorage.setItem("juggler_coins", coins);
+}
+
+function getRandomSymbol() {
+  const rand = Math.random();
+  let sum = 0;
+  for (const s of symbols) {
+    sum += symbolProb[s];
+    if (rand < sum) return s;
+  }
+  return "🍒";
+}
+
+// 複数段リール用の縦3つ分のシンボル生成
+function generateReelSymbols() {
+  for (let i = 0; i < 3; i++) {
+    const container = reels[i];
+    container.innerHTML = "";
+    // シンボルはランダムに3個（上 中 下）
+    for (let y = 0; y < 3; y++) {
+      const div = document.createElement("div");
+      div.className = "symbol";
+      div.textContent = getRandomSymbol();
+      container.appendChild(div);
+    }
+    container.style.top = "0px";
+  }
+}
+
+// スピンアニメ（高速回転）
+function spinReel(index) {
+  spinning[index] = true;
+  let pos = 0;
+  const container = reels[index];
+  const speed = isSlowSpin ? 150 : 50; // 目押し時は遅く回転
+  spinIntervals[index] = setInterval(() => {
+    pos = (pos + 1) % 3; // 3段なので3ループ
+    container.style.top = `-${pos * symbolHeight}px`;
+  }, speed);
+}
+
+// 停止処理
+function stop(index) {
+  if (!spinning[index] || stopped[index]) return;
+  if (index !== currentStopIndex) return; // 左→右順番厳守
+
+  clearInterval(spinIntervals[index]);
+  spinning[index] = false;
+  stopped[index] = true;
+  currentStopIndex++;
+
+  let currentTop = parseInt(reels[index].style.top || "0", 10);
+  if (isNaN(currentTop)) currentTop = 0;
+
+  // 3段のどの位置で止まったか計算
+  const snapIndex = Math.round(Math.abs(currentTop) / symbolHeight) % 3;
+
+  reels[index].style.top = `-${snapIndex * symbolHeight}px`;
+
+  // 止まった3段分のシンボルを配列として取得（上 中 下）
+  const symbolElems = reels[index].children;
+  let stoppedSymbols = [];
+  for(let i=0; i<3; i++){
+    stoppedSymbols.push(symbolElems[(snapIndex + i) % 3].textContent);
+  }
+  spinPositions[index] = stoppedSymbols;
+
+  if (stopped.every(v => v)) {
+    checkResult();
+  }
+}
+
+// 払い出し判定（横3列、斜め2列）
+function checkResult() {
+  // 横ライン（中段のみジャグラーは中段判定）
+  const line = spinPositions.map(col => col[1]);
+
+  // 横揃い判定
+  if (line.every(s => s === "7️⃣")) {
+    bigBonus();
+    return;
+  }
+  if (line.every(s => s === "BAR")) {
+    regBonus();
+    return;
+  }
+
+  // 斜め揃い判定
+  // 左上→中央→右下
+  if (
+    spinPositions[0][0] === "7️⃣" &&
+    spinPositions[1][1] === "7️⃣" &&
+    spinPositions[2][2] === "7️⃣"
+  ) {
+    bigBonus();
+    return;
+  }
+  if (
+    spinPositions[0][2] === "7️⃣" &&
+    spinPositions[1][1] === "7️⃣" &&
+    spinPositions[2][0] === "7️⃣"
+  ) {
+    bigBonus();
+    return;
+  }
+  if (
+    spinPositions[0][0] === "BAR" &&
+    spinPositions[1][1] === "BAR" &&
+    spinPositions[2][2] === "BAR"
+  ) {
+    regBonus();
+    return;
+  }
+  if (
+    spinPositions[0][2] === "BAR" &&
+    spinPositions[1][1] === "BAR" &&
+    spinPositions[2][0] === "BAR"
+  ) {
+    regBonus();
+    return;
+  }
+
+  alert("はずれ");
+  if (autoPlay) setTimeout(start, 1000);
+}
+
+// BIGボーナス演出
+async function bigBonus() {
+  gogoEl.style.display = "block";
+  reelContainers.forEach(rc => rc.style.borderColor = "magenta");
+  bgmBig.currentTime = 0;
+  bgmBig.play();
+
+  let bigCoins = 0;
+  const bigMax = 100;
+  for (let i = 0; i <= bigMax; i += 5) {
+    bigCoins = i;
+    coins += 5;
+    updateCoinDisplay();
+    await new Promise(r => setTimeout(r, 100));
+  }
+  saveCoins();
+  bgmBig.pause();
+  reelContainers.forEach(rc => rc.style.borderColor = "#555");
+  gogoEl.style.display = "none";
+
+  if (autoPlay) setTimeout(start, 1500);
+}
+
+// REGボーナス演出
+async function regBonus() {
+  gogoEl.style.display = "block";
+  reelContainers.forEach(rc => rc.style.borderColor = "cyan");
+  bgmReg.currentTime = 0;
+  bgmReg.play();
+
+  let regCoins = 0;
+  const regMax = 40;
+  for (let i = 0; i <= regMax; i += 4) {
+    regCoins = i;
+    coins += 4;
+    updateCoinDisplay();
+    await new Promise(r => setTimeout(r, 150));
+  }
+  saveCoins();
+  bgmReg.pause();
+  reelContainers.forEach(rc => rc.style.borderColor = "#555");
+  gogoEl.style.display = "none";
+
+  if (autoPlay) setTimeout(start, 1500);
+}
+
+// スタート処理
+function start() {
+  lastBet = Math.min(Math.max(1, parseInt(betInput.value,10) || 3), coins);
+  if(coins < lastBet){
+    alert("コインが足りません！");
+    return;
+  }
+  coins -= lastBet;
+  updateCoinDisplay();
+  saveCoins();
+
+  spinning = [false, false, false];
+  stopped = [false, false, false];
+  currentStopIndex = 0;
+  spinPositions = [null, null, null];
+
+  for (let i = 0; i < 3; i++) {
+    generateReelSymbols(); // 毎回リール内容は変わる仕様
+    spinReel(i);
+  }
+}
+
+// オートプレイ切り替え
+function toggleAuto() {
+  autoPlay = !autoPlay;
+  alert(`オートプレイ: ${autoPlay ? 'ON' : 'OFF'}`);
+  if (autoPlay && !spinning.some(s => s)) {
+    start();
+  }
+}
+
+// 目押しモード切替
+function toggleSlowSpin() {
+  isSlowSpin = !isSlowSpin;
+  alert(`目押しモード: ${isSlowSpin ? 'ON' : 'OFF'}`);
+}
+
+// 貸し出し処理
+function loanCoins() {
+  coins = 100;
+  updateCoinDisplay();
+  saveCoins();
+  alert("コインを貸し出しました！ 100枚追加されました。");
+}
+
+loadCoins();
+
+</script>
+
+</body>
+</html>
